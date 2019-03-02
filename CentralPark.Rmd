@@ -1,0 +1,193 @@
+---
+title: "CentralPark"
+author: "Ilya"
+date: "3/2/2019"
+output: github_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+#####install packages
+```{r packages, echo=FALSE}
+pkgTest <- function(x)
+{
+  if (x %in% rownames(installed.packages()) == FALSE) {
+    install.packages(x, dependencies= TRUE,
+                     repos = "http://cran.us.r-project.org")    
+  }
+  library(x, character.only = TRUE)
+}
+neededPackages <- c("sp", "raster", "leaflet", "data.table", "caret",  "ggplot2", "sp",  "rinat", "ggplot2", "lubridate", "sdmpredictors", "dplyr", "lme4", "rgeos", "adehabitatHR", "leaflet.extras", "magrittr", "data.table", "gbm", "rgdal", "geojsonio", "sf", "scales", "rLandsat", "reddPrec", "mapview", "MASS", "reticulate", 
+                    "readtext")
+
+for (package in neededPackages){pkgTest(package)}
+
+```
+
+
+####read in protected area data. source: https://gapanalysis.usgs.gov/padus/data/download/
+```{r PAD}
+path = "PAD/"
+PAD = shapefile(paste0(path,
+                       "PADUS1_4Combined.shp"))
+
+PAD_wgs84 <- spTransform(PAD, CRS("+proj=longlat +datum=WGS84"))
+
+#assign cooordinates (package: sp)
+PAD_coordinates = coordinates(PAD_wgs84)
+
+PAD_wgs84$X = PAD_coordinates[,1]
+PAD_wgs84$Y = PAD_coordinates[,2]
+
+save(PAD_wgs84, file = "PAD_wgs84.Rdata")
+
+
+# state = "NY"
+# shp_state = subset(shp, State_Nm == state)
+# 
+# #change datum
+# proj_new = "+proj=longlat +datum=WGS84 +no_defs+ellps=WGS84 +towgs84=0,0,0"
+# 
+# shp_transform <- spTransform(shp_state, CRS(proj_new))
+# 
+# #assign cooordinates (package: sp)
+# PAD_coordinates = coordinates(shp_transform)
+# 
+# shp_transform$X = PAD_coordinates[,1]
+# shp_transform$Y = PAD_coordinates[,2]
+
+# uname = sort(shp_state$Loc_Nm)
+# 
+# loc = "Central Park"#this is smaller than "YELL"
+# 
+# sh p_loc = subset(shp_state, Loc_Nm == loc)
+# save(shp_loc, file = "shp_loc.Rdata")
+
+```
+
+##iNaturalist data 
+####get records for each species from iNaturalist 
+```{r rinat1}
+# ## Return records from iNaturalist
+
+#this gives too large bounding box
+# load("shp_loc.Rdata")
+# proj_new = "+proj=longlat +datum=WGS84 +no_defs+ellps=WGS84 +towgs84=0,0,0"
+# #https://stackoverflow.com/questions/30018098/how-to-convert-utm-coordinates-to-lat-and-long-in-r
+# shp_loc_t <- spTransform(shp_loc, CRS(proj_new))
+# #projection(shp_loc) <- CRS()
+# #bbox_tmp = bbox(shp_loc_t)
+# bbox = as.data.frame(bbox(shp_loc_t))
+
+out = NULL
+
+#look up bounding box on google maps
+#this only got two records, so expanded to NYC
+ymax = 40.765765
+ymin = 40.765516
+xmax = -73.948257
+xmin = -73.982301
+
+#https://www.flickr.com/places/info/2459115
+xmin= -74.2589
+xmax = -73.7004
+ymin = 40.4774
+ymax = 40.9176
+sppinat <- get_inat_obs(year = 2019, month = 2, maxresults = 100000,
+                        bounds = c(ymin,xmin,ymax,xmax))
+
+sppinat_spdf = sppinat
+#turn it into a SpatialPointsDataFrame
+
+#turn it into a SpatialPointsDataFrame
+coordinates(sppinat_spdf) <- c("longitude","latitude")#package sp
+
+# sppinat_spdf = SpatialPointsDataFrame(coords = sppinat[,c("longitude", "latitude")], 
+#                                data = sppinat)
+
+
+projection(sppinat_spdf) <- projection(PAD_wgs84)
+
+sppinat_spdf$park <- over(sppinat_spdf, PAD_wgs84)$Unit_Nm#name of park
+
+unique(sppinat_spdf$park)
+
+#convert back to data.frame
+sppinat_df = as.data.frame(sppinat_spdf)
+
+  #remove duplicates if there are any
+  occs.dups <- duplicated(sppinat_df[c('latitude', 'longitude', 'datetime')])
+  sppinat_df <- sppinat_df[!occs.dups,]
+  dim(sppinat_spdf)
+
+inatCentralPark = subset(sppinat_df,
+                         park == "Central Park")
+#minimum fields: datetime, latitude, longitude, scientific_name
+inatCentralPark = inatCentralPark[, c("common_name", "scientific_name", "datetime", "latitude", "longitude", "quality_grade", "user_login", "image_url")]
+
+#fix datetime
+inatCentralPark$datetime = strptime(inatCentralPark$datetime, format = "%Y-%m-%d %H:%M:%S", tz = "")
+inatCentralPark$datetime = strftime(inatCentralPark$datetime, format = "%Y-%m-%d %H:%M:%S", tz = "", usetz = FALSE)
+inatCentralPark$date = as.Date(inatCentralPark$datetime)
+inatCentralPark$month = month(inatCentralPark$date)
+inatCentralPark$year = year(inatCentralPark$date)
+inatCentralPark$day = day(inatCentralPark$date)
+inatCentralPark$hour = hour(inatCentralPark$datetime)
+animal = c("American Robin", "Wood Duck", "Song Sparrow", "Northern Cardinal", "Mandarin Duck",
+           "Red-tailed Hawk", "Downy Woodpecker",
+           "White-breasted Nuthatch",
+           "Tufted Titmouse", "Mallard", "Great Blue Heron", "Blue Jay")
+
+CPBirds = subset(inatCentralPark, 
+                 common_name %in% animal) 
+save(CPBirds, file = "CPBirds.Rdata")
+df_sum <- CPBirds %>% group_by(common_name) %>%
+  summarize(count = n()) 
+
+CPOneDayOneHour = subset(inatCentralPark, day == 28 & hour == 16 )
+```
+
+####make map of 5 birds from iNaturalist
+```{r birds}
+df <- CPBirds
+df <- subset(df, common_name %in% c("Northern Cardinal", "Red-tailed Hawk", "Tufted Titmouse", "Mandarin Duck", "Blue Jay"))
+factpal <- colorFactor(topo.colors(length(unique(df$common_name))), df$common_name)
+zoom = 14
+M<-    leaflet(df) %>%
+      addTiles() %>%
+       setView(lng = mean(df$longitude), lat = mean(df$latitude) , zoom =zoom) %>%
+      addCircleMarkers(lng = df$longitude,
+                       lat = df$latitude,
+                 #color = color.vec[df$taxon_num],
+                 color = ~factpal(common_name)) %>%
+                    addLegend("topleft", pal = factpal, values = ~df$common_name, opacity = 1.0, title = "species")
+
+mapshot(M, file = "central_park_birds.png")
+M
+
+```
+
+
+####make map of species recorded in iNaturalist in one hour
+```{r onehour}
+df <- CPOneDayOneHour
+factpal <- colorFactor(topo.colors(length(unique(df$common_name))), df$common_name)
+zoom = 16
+M<-    leaflet(df) %>%
+      addTiles() %>%
+       setView(lng = mean(df$longitude), lat = mean(df$latitude) , zoom =zoom) %>%
+      addCircleMarkers(lng = df$longitude,
+                       lat = df$latitude,
+                 #color = color.vec[df$taxon_num],
+                 color = ~factpal(common_name)) %>%
+                    addLegend("topleft", pal = factpal, values = ~df$common_name, opacity = 1.0, title = "species")
+
+mapshot(M, file = "central_park_2019Feb28_1600.png")
+M
+
+```
+
+
+
